@@ -1,0 +1,26 @@
+name: wes-build
+
+services:
+  simulator:
+    image: wes-simulator:latest
+    build:
+      context: ../AgvSimulator
+      dockerfile: ../wes/deploy/simulator.Dockerfile
+
+  opentcs:
+    image: wes-opentcs:latest
+    build:
+      context: ../opentcs-integration-FMS
+      dockerfile: Dockerfile
+
+  backend:
+    image: wes-be:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+  frontend:
+    image: wes-fe:latest
+    build:
+      context: ../wes-client-v2
+      dockerfile: Dockerfile

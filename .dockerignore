@@ -1,0 +1,11 @@
+.git
+.agents
+.claude
+node_modules
+dist
+test
+report
+slide
+scripts
+.env
+*.log

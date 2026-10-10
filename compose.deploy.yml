@@ -1,0 +1,137 @@
+name: ${COMPOSE_PROJECT_NAME:?Set COMPOSE_PROJECT_NAME in deploy/.env.<env>}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-wes}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in deploy/.env.<env>}
+      POSTGRES_DB: ${POSTGRES_DB:-wes}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+    networks:
+      - wes-internal
+
+  opentcs:
+    image: ${DOCKERHUB_NAMESPACE:?Set DOCKERHUB_NAMESPACE in deploy/.env.<env>}/wes-opentcs:${OPENTCS_TAG:?Set OPENTCS_TAG in deploy/releases/<env>.env}
+    environment:
+      JAVA_TOOL_OPTIONS: -Djava.rmi.server.hostname=${OPENTCS_RMI_ADVERTISED_HOST:-127.0.0.1}
+    ports:
+      - "${OPENTCS_BIND_ADDRESS:-127.0.0.1}:${OPENTCS_HTTP_PORT:-59200}:59200"
+      - "${OPENTCS_RMI_BIND_ADDRESS:-127.0.0.1}:${OPENTCS_RMI_REGISTRY_PORT:-1499}:${OPENTCS_RMI_REGISTRY_PORT:-1499}"
+      - "${OPENTCS_RMI_BIND_ADDRESS:-127.0.0.1}:${OPENTCS_RMI_SERVICE_PORT:-59000}:${OPENTCS_RMI_SERVICE_PORT:-59000}"
+    volumes:
+      - opentcs-data:/opt/opentcs/data
+      - opentcs-log:/opt/opentcs/log
+      - ${OPENTCS_PROPERTIES_FILE:?Set OPENTCS_PROPERTIES_FILE in deploy/.env.<env>}:/opt/opentcs/config/opentcs-kernel.properties:ro
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/59200'"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    restart: unless-stopped
+    stop_grace_period: 30s
+    init: true
+    networks:
+      - wes-internal
+      - mqtt-shared
+
+  backend:
+    image: ${DOCKERHUB_NAMESPACE:?Set DOCKERHUB_NAMESPACE in deploy/.env.<env>}/wes-be:${BE_TAG:?Set BE_TAG in deploy/releases/<env>.env}
+    environment:
+      PORT: 3000
+      WEB_ORIGIN: ${PUBLIC_URL:?Set PUBLIC_URL in deploy/.env.<env>}
+      APP_URL: ${PUBLIC_URL:?Set PUBLIC_URL in deploy/.env.<env>}
+      PGHOST: postgres
+      PGPORT: 5432
+      PGUSER: ${POSTGRES_USER:-wes}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: ${POSTGRES_DB:-wes}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in deploy/.env.<env>}
+      JWT_ACCESS_TTL: ${JWT_ACCESS_TTL:-1d}
+      REFRESH_TTL_DAYS: ${REFRESH_TTL_DAYS:-7}
+      RESET_TTL_MINUTES: ${RESET_TTL_MINUTES:-30}
+      OPENTCS_KERNEL_URL: http://opentcs:59200
+      OPENTCS_MAP_AUTO_LOAD: ${OPENTCS_MAP_AUTO_LOAD:-false}
+      OPENTCS_MAP_PATH: ${OPENTCS_MAP_PATH:-maps/v7-vda5050.xml}
+      DISPATCH_MATCHER: ${DISPATCH_MATCHER:-hungarian}
+      VEHICLE_TYPE: ${VEHICLE_TYPE:-vda5050}
+      SIMULATOR_URL: http://simulator:8091
+      SIMULATOR_TOKEN: ${SIMULATOR_TOKEN:-}
+      MQTT_URL: ${MQTT_URL:-mqtt://mqtt-broker:1883}
+      MQTT_USERNAME: ${MQTT_USERNAME:-}
+      MQTT_PASSWORD: ${MQTT_PASSWORD:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      MAIL_FROM: ${MAIL_FROM:-}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    depends_on:
+      postgres:
+        condition: service_healthy
+      opentcs:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - wes-internal
+      - mqtt-shared
+
+  simulator:
+    profiles: [simulator]
+    image: ${DOCKERHUB_NAMESPACE:?Set DOCKERHUB_NAMESPACE in deploy/.env.<env>}/wes-simulator:${SIMULATOR_TAG:?Set SIMULATOR_TAG in deploy/releases/<env>.env}
+    environment:
+      SIM_MODE: server
+      SIM_MQTT_HOST: ${SIM_MQTT_HOST:-mqtt-broker}
+      SIM_MQTT_PORT: ${SIM_MQTT_PORT:-1883}
+      SIM_MQTT_USERNAME: ${SIM_MQTT_USERNAME:-}
+      SIM_MQTT_PASSWORD: ${SIM_MQTT_PASSWORD:-}
+      SIM_API_TOKEN: ${SIMULATOR_TOKEN:-}
+      SIM_SEED_DEFAULTS: "false"
+      SIM_STATE_FILE: /opt/agv-simulator/data/fleet.json
+    ports:
+      - "127.0.0.1:${SIMULATOR_HTTP_PORT:-8091}:8091"
+    volumes:
+      - simulator-data:/opt/agv-simulator/data
+    restart: unless-stopped
+    networks:
+      - wes-internal
+      - mqtt-shared
+
+  frontend:
+    image: ${DOCKERHUB_NAMESPACE:?Set DOCKERHUB_NAMESPACE in deploy/.env.<env>}/wes-fe:${FE_TAG:?Set FE_TAG in deploy/releases/<env>.env}
+    ports:
+      - "${WES_BIND_ADDRESS:-127.0.0.1}:${WES_HTTP_PORT:-8080}:80"
+    volumes:
+      - ./downloads:/usr/share/nginx/html/downloads:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - wes-internal
+
+volumes:
+  postgres-data:
+  opentcs-data:
+  opentcs-log:
+  simulator-data:
+
+networks:
+  wes-internal:
+    driver: bridge
+  mqtt-shared:
+    external: true
+    name: ${MQTT_NETWORK_NAME:-fms_default}

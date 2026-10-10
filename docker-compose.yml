@@ -1,0 +1,72 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: wes-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: wes
+    ports:
+      - '5432:5432'
+    volumes:
+      - wes_pgdata:/var/lib/postgresql/data
+      # Auto-apply schema on first boot of an empty volume.
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+
+  mqtt:
+    image: eclipse-mosquitto:2
+    container_name: aubot-mqtt
+    ports:
+      - '1883:1883'
+    volumes:
+      - ./mqtt/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+
+  # The one shared AGV simulator: every user drives the same virtual vehicles from the web
+  # console (Công cụ → Mô phỏng AGV), so each vehicle is published to the broker by exactly one
+  # process. Do not also run the desktop simulator with the same vehicle names.
+  # WES on the host reaches it at SIMULATOR_URL=http://127.0.0.1:8091 (wes/.env).
+  simulator:
+    build:
+      context: ../AgvSimulator
+      dockerfile: ../deploy/simulator.Dockerfile
+    image: wcsfms/agv-simulator:dev
+    container_name: aubot-simulator
+    restart: unless-stopped
+    depends_on:
+      - mqtt
+    environment:
+      SIM_MQTT_HOST: mqtt
+      SIM_MQTT_PORT: 1883
+      SIM_MQTT_USERNAME: ''
+      SIM_MQTT_PASSWORD: ''
+      SIM_API_TOKEN: ${SIMULATOR_TOKEN:-}
+    ports:
+      - '127.0.0.1:8091:8091'
+    volumes:
+      - simulator_data:/opt/agv-simulator/data
+
+  # Local-only catcher — safe for testing the send *mechanism*, never reaches a real inbox.
+  # UI: http://localhost:8025. Point wes/.env SMTP_HOST/SMTP_PORT at 127.0.0.1:1025 to use it.
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: wes-mailpit
+    ports:
+      - '1025:1025'
+      - '8025:8025'
+
+  # Real outbound mail server — sends directly to the recipient's mail server via MX lookup,
+  # no third-party relay. No sender reputation/SPF/DKIM/PTR set up, so delivery may land in
+  # spam or get rejected outright — accepted for dev use. Needs outbound port 25 to the
+  # internet; if the network blocks that, delivery will simply time out.
+  mailserver:
+    image: boky/postfix:latest
+    container_name: wes-mailserver
+    environment:
+      ALLOWED_SENDER_DOMAINS: wes.local
+      POSTFIX_myhostname: wes.local
+    ports:
+      - '1587:587' # SMTP submission (STARTTLS) — point wes/.env SMTP_HOST/SMTP_PORT here
+
+volumes:
+  wes_pgdata:
+  simulator_data:

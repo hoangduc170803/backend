@@ -1,0 +1,20 @@
+{
+  "extends": "./tsconfig.json",
+  "include": ["src"],
+  "exclude": ["node_modules", "test", "dist", "frontend", "**/*spec.ts"],
+  "watchOptions": {
+    "watchFile": "fixedPollingInterval",
+    "excludeDirectories": [
+      "**/node_modules",
+      "dist",
+      ".git",
+      "report",
+      "slide",
+      "maps",
+      "database",
+      "scripts",
+      "mqtt",
+      ".agents"
+    ]
+  }
+}
